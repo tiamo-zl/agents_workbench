@@ -119,6 +119,13 @@ config.json      # 看板配置（用户通过管理界面维护）：hidden 隐
   `pre_approval_request` → request，`post_approval_response` / `on_session_end`
   → resolve；首次触发会在 hermes 会话内弹一次授权确认（shell-hooks
   allowlist 机制）。
+- zcode：**已接线**，`~/.zcode/cli/config.json` 的 `hooks` 块（新文件，已备份
+  语义上无旧配置）：`PermissionRequest` → request（标记含
+  `{"msg": "permission: <工具名>"}`，卡片显示「待批准：<工具>」），
+  `PostToolUse` / `Stop` → resolve；会话 id 取 stdin JSON 或
+  `ZCODE_SESSION_ID` 环境变量。**hooks 在 ZCode 启动时加载，改配置后需重启
+  ZCode 才生效**。`part` 表的 pending 工具状态与 permission 表都不是可靠的
+  等待信号（前者有历史噪声、后者不落盘），不要用。
 - codex：**无事件源**——notify 只有 agent-turn-complete、rollout 不落审批
   事件（审批走 TUI 协议流），本地拿不到审批信号，暂只有 idle/busy。
 
