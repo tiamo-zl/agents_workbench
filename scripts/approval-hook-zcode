@@ -1,0 +1,40 @@
+#!/bin/sh
+# ZCode 统一 hook 入口：approval-hook-zcode <event>
+# event ∈ PermissionRequest | PostToolUse | Stop
+# stdin 为 hook 事件 JSON；会话 id 也可能由环境变量 ZCODE_SESSION_ID 提供。
+#   PermissionRequest → request：写会话级标记，内容为 {"msg": "permission: <工具>", "ts"}
+#   PostToolUse / Stop → resolve：删除标记
+set -eu
+event="${1:?event required}"
+exec python3 -c '
+import json, sys, os, time
+
+event = sys.argv[1]
+home = os.path.expanduser("~")
+zcode_dir = os.path.join(home, ".agent_board", "approvals", "zcode")
+
+sid, tool = os.environ.get("ZCODE_SESSION_ID", ""), ""
+try:
+    d = json.load(sys.stdin)
+    sid = d.get("session_id") or d.get("sessionId") or sid
+    tool = (d.get("tool_name") or d.get("toolName") or d.get("tool") or "")
+except Exception:
+    pass
+
+is_request = event == "PermissionRequest"
+if not sid:
+    sys.exit(0)   # 拿不到会话 id：跳过（可按需改为 agent 级标记）
+
+os.makedirs(zcode_dir, exist_ok=True)
+target = os.path.join(zcode_dir, sid)
+now = time.time()
+if is_request:
+    with open(target, "w") as f:
+        json.dump({"msg": f"permission: {tool}".strip(), "ts": now}, f, ensure_ascii=False)
+    os.utime(target, (now, now))
+else:
+    try:
+        os.remove(target)
+    except OSError:
+        pass
+' "$event"
