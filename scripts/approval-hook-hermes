@@ -1,0 +1,23 @@
+#!/bin/sh
+# Hermes Agent 统一 hook 入口：approval-hook-hermes <event>
+# event ∈ pre_approval_request | post_approval_response | on_session_end
+# stdin 为 hook 事件 JSON（含 session_id）。
+#   pre_approval_request   → request（会话级标记）
+#   其余（审批已回复/会话结束） → resolve
+set -eu
+HOOK="$(dirname "$0")/approval-hook"
+event="${1:?event required}"
+line=$(python3 -c '
+import json, sys
+event = sys.argv[1]
+sid = "-"
+try:
+    d = json.load(sys.stdin)
+    sid = d.get("session_id") or "-"
+except Exception:
+    pass
+action = "request" if event == "pre_approval_request" else "resolve"
+print(sid, action)
+' "$event")
+# shellcheck disable=SC2086
+exec "$HOOK" hermes $line

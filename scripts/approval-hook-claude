@@ -1,0 +1,42 @@
+#!/bin/sh
+# Claude Code 统一 hook 入口：approval-hook-claude <event>
+# event ∈ Notification | PostToolUse | UserPromptSubmit | Stop
+# stdin 为 hook 事件 JSON（session_id；Notification 另含 message）。
+#   Notification 且消息含 permission → request：写会话级标记，内容为审批消息
+#     （格式 {"msg": "...", "ts": ...}，看板用它显示「待批准：使用 Bash」）
+#   其余一切事件 → resolve：删除该会话的标记
+set -eu
+event="${1:?event required}"
+exec python3 -c '
+import json, sys, os, time
+
+event = sys.argv[1]
+home = os.path.expanduser("~")
+claude_dir = os.path.join(home, ".agent_board", "approvals", "claude")
+
+sid, msg = "-", ""
+try:
+    d = json.load(sys.stdin)
+    sid = d.get("session_id") or "-"
+    msg = (d.get("message") or "") if event == "Notification" else ""
+except Exception:
+    pass
+
+is_request = event == "Notification" and "permission" in msg.lower()
+
+if sid == "-":   # 极少数拿不到 session_id 的情况：agent 级平文件
+    target = os.path.join(home, ".agent_board", "approvals", "claude")
+else:
+    os.makedirs(claude_dir, exist_ok=True)
+    target = os.path.join(claude_dir, sid)
+
+if is_request:
+    with open(target, "w") as f:
+        json.dump({"msg": msg, "ts": time.time()}, f, ensure_ascii=False)
+    os.utime(target, (time.time(), time.time()))
+else:
+    try:
+        os.remove(target)
+    except OSError:
+        pass
+' "$event"

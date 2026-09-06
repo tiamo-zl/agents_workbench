@@ -1,0 +1,1 @@
+nohup uv run workbench > /tmp/agent_board.log 2>&1 &

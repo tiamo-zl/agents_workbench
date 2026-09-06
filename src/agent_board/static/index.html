@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent 看板</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app" v-cloak>
+
+  <header class="topbar">
+    <div class="brand">⚡ Agent 看板
+      <span class="conn" :class="connected ? 'on' : 'off'">{{ connected ? '已连接' : '连接中断，重连中…' }}</span>
+    </div>
+    <div class="summary">{{ runningCount }} 个运行中 · 更新于 {{ fmtClock(lastFrame) }}</div>
+    <button class="btn" :class="{ 'notify-on': notifyEnabled }" @click="toggleNotify"
+            :title="notifyEnabled ? '系统通知已开启（看板不在前台时弹出），点击关闭' : '开启系统通知：进入等待审批时弹 macOS 通知'">
+      🔔<span v-if="notifyEnabled"> 已开</span>
+    </button>
+    <button class="btn" @click="openManage">⚙ 管理</button>
+    <button class="btn primary" @click="showTaskPanel = !showTaskPanel">
+      {{ showTaskPanel ? '收起任务面板' : '＋ 任务流水线' }}
+    </button>
+  </header>
+
+  <!-- 任务流水线：创建面板 -->
+  <section v-if="showTaskPanel" class="panel">
+    <label class="field">
+      <span>总目标（可选，仅作展示）</span>
+      <input v-model="form.goal" placeholder="例：调研 XX 并产出对比报告">
+    </label>
+    <div class="steps-edit">
+      <div class="step-edit" v-for="(s, i) in form.steps" :key="i">
+        <div class="step-edit-head">
+          <b>步骤 {{ i + 1 }}</b>
+          <select v-model="s.agent">
+            <option v-for="ag in taskAgents" :value="ag" :key="ag">{{ taskAgentNames[ag] }}</option>
+          </select>
+          <button class="btn ghost" v-if="form.steps.length > 1" @click="form.steps.splice(i, 1)">删除</button>
+        </div>
+        <textarea v-model="s.prompt" rows="3"
+          :placeholder="'提示词。可用 {input} 引用上一步的输出' + (i === 0 ? '（首步没有上一步，不要用 {input}）' : '')"></textarea>
+      </div>
+    </div>
+    <div class="panel-foot">
+      <button class="btn ghost" @click="addStep">＋ 添加步骤</button>
+      <button class="btn primary" :disabled="submitting" @click="submitTask">
+        {{ submitting ? '发起中…' : '▶ 发起任务' }}
+      </button>
+      <span class="hint">点击发起后才会真正运行对应 agent 的 CLI，按步骤顺序执行，上一步输出经 {input} 传入下一步</span>
+    </div>
+  </section>
+
+  <!-- 任务流水线：运行中的任务 -->
+  <section v-if="tasks.length" class="tasks">
+    <div class="task-card" v-for="t in tasks" :key="t.id">
+      <div class="task-head">
+        <span class="badge" :class="'tsk-' + t.status">{{ taskStatusText(t.status) }}</span>
+        <b class="goal">{{ t.goal || '（未命名任务）' }}</b>
+        <span class="muted mono">{{ t.id }}</span>
+        <span class="muted">已运行 {{ fmtDur(t) }}</span>
+        <button class="btn ghost danger" v-if="t.status === 'running'" @click="cancelTask(t.id)">取消</button>
+      </div>
+      <div class="step" v-for="(s, i) in t.steps" :key="i">
+        <div class="step-head">
+          <span class="badge sm" :class="'stp-' + s.status">{{ stepStatusText(s.status) }}</span>
+          <b>{{ taskAgentNames[s.agent] || s.agent }}</b>
+          <span class="muted oneline">{{ s.prompt }}</span>
+        </div>
+        <div class="out" v-if="s.output">{{ s.output }}</div>
+      </div>
+    </div>
+  </section>
+
+  <template v-if="activeAgents.length">
+    <h3 class="sec">🔥 正在干活（{{ activeAgents.length }}）<span class="sec-hint">等待审批 / 忙碌</span></h3>
+    <div class="grid">
+      <agent-card v-for="a in activeAgents" :key="a.id" :a="a" :pline="pipelineOf(a)" @enter="enter(a)" @sessions="openSessions(a)" @jump="(s) => jumpSession(a.id, s)"></agent-card>
+    </div>
+  </template>
+
+  <template v-if="runningAgents.length">
+    <h3 class="sec collapsible" @click="toggleCollapse('running')"
+        :title="collapsed.running ? '点击展开' : '点击折叠'">
+      <span class="arrow">{{ collapsed.running ? '▸' : '▾' }}</span>● 运行中 / 空闲（{{ runningAgents.length }}）
+    </h3>
+    <div class="grid compact" v-show="!collapsed.running">
+      <agent-card v-for="a in runningAgents" :key="a.id" :a="a" :pline="pipelineOf(a)" @enter="enter(a)" @sessions="openSessions(a)" @jump="(s) => jumpSession(a.id, s)"></agent-card>
+    </div>
+  </template>
+
+  <template v-if="offlineAgents.length">
+    <h3 class="sec collapsible" @click="toggleCollapse('offline')"
+        :title="collapsed.offline ? '点击展开' : '点击折叠'">
+      <span class="arrow">{{ collapsed.offline ? '▸' : '▾' }}</span>○ 未运行（{{ offlineAgents.length }}）
+    </h3>
+    <div class="grid compact" v-show="!collapsed.offline">
+      <agent-card v-for="a in offlineAgents" :key="a.id" :a="a" :pline="pipelineOf(a)" @enter="enter(a)" @sessions="openSessions(a)" @jump="(s) => jumpSession(a.id, s)"></agent-card>
+    </div>
+  </template>
+
+  <!-- agent 管理弹窗 -->
+  <div class="modal-mask" v-if="manageOpen" @click.self="manageOpen = false">
+    <div class="modal">
+      <div class="modal-head">
+        <b>Agent 管理</b>
+        <button class="btn ghost" @click="manageOpen = false">关闭</button>
+      </div>
+
+      <div class="mgmt-list">
+        <div class="mgmt-row" v-for="a in manageList" :key="a.id">
+          <span class="dot" :class="a.hidden ? 'offline' : 'running'"></span>
+          <div class="mgmt-info">
+            <b>{{ a.name }}</b>
+            <span class="muted">{{ kindLabel(a.kind) }}<template v-if="a.source === 'custom'"> · 自定义</template> · {{ a.desc }}</span>
+          </div>
+          <button class="btn ghost sm" @click="editAgent(a)">编辑</button>
+          <button class="btn ghost danger sm" v-if="a.source === 'custom'" @click="delCustom(a)">删除</button>
+          <label class="switch" :title="a.hidden ? '已隐藏，点击显示' : '显示中，点击隐藏'">
+            <input type="checkbox" :checked="!a.hidden" @change="toggleHidden(a)">
+            <i></i>
+          </label>
+        </div>
+      </div>
+
+      <hr class="sep">
+      <div class="add-title-row">
+        <b>{{ editTitle }}</b>
+        <span class="help" @mouseenter="openHelp" @mouseleave="scheduleCloseHelp">
+          <span class="help-mark">?</span>
+          <div class="help-pop" v-if="helpOpen">
+            <b>如何使用</b>
+            <ul>
+              <li><b>桌面应用</b>：识别串填应用在 /Applications 里的名字（如 Warp.app，可从下拉候选选）。看板按进程路径判断运行状态，点卡片 = 打开该应用。</li>
+              <li><b>CLI 进程</b>：识别串填命令行里包含的一段文字（如 aider）。看板在进程列表中匹配，点卡片 = 激活 iTerm2 里对应窗口。</li>
+              <li><b>Web 服务</b>：填 host 和端口（如 127.0.0.1 : 1234）。看板定时对该端口探活，点卡片 = 浏览器打开地址。</li>
+            </ul>
+            <p>开关只控制「看板上是否显示」，不影响 agent 本身；所有配置存在工作区 config.json，可随时恢复。添加后约 2 秒自动出现在看板。</p>
+          </div>
+        </span>
+        <button class="btn ghost sm" v-if="editId" @click="cancelEdit">取消编辑</button>
+      </div>
+      <div class="add-form">
+        <select v-if="!editingBuiltin" v-model="addCfg.type" class="fixed">
+          <option value="app">桌面应用</option>
+          <option value="cli">CLI 进程</option>
+          <option value="web">Web 服务</option>
+        </select>
+        <input v-model="addCfg.name" :placeholder="editingBuiltin ? ('默认：' + editDefaultName) : '显示名称，如 Warp'">
+        <input v-if="!editingBuiltin && addCfg.type === 'app'" v-model="addCfg.match" list="app-catalog"
+               placeholder="应用匹配串，如 Warp.app（可从下拉候选选）">
+        <datalist id="app-catalog">
+          <option v-for="x in appCatalog" :key="x" :value="x"></option>
+        </datalist>
+        <input v-if="!editingBuiltin && addCfg.type === 'cli'" v-model="addCfg.match"
+               placeholder="进程命令行包含的串，如 aider">
+        <template v-if="!editingBuiltin && addCfg.type === 'web'">
+          <input v-model="addCfg.host" class="fixed" placeholder="host（默认 127.0.0.1）">
+          <input v-model="addCfg.port" class="fixed" placeholder="端口，如 1234">
+        </template>
+        <span v-if="editingBuiltin" class="muted">内置 agent 只能改显示名称，检测逻辑不变；清空并保存 = 恢复默认名</span>
+        <button class="btn primary" @click="submitAgentForm">{{ editId ? '✓ 保存修改' : '＋ 添加' }}</button>
+      </div>
+      <p class="hint">隐藏只是不在看板展示，配置保存在工作区 config.json，随时可回来重新打开；修改后约 2 秒生效。</p>
+    </div>
+  </div>
+
+  <!-- 会话列表弹窗 -->
+  <div class="modal-mask" v-if="sessOpen" @click.self="sessOpen = false">
+    <div class="modal">
+      <div class="modal-head">
+        <b>{{ sessAgent ? sessAgent.name : '' }} · 最近会话</b>
+        <button class="btn ghost sm"
+                :disabled="sessView === 'all' && !sessHidden.length"
+                @click="toggleSessView">
+          {{ sessView === 'all' ? `隐藏中的会话 (${sessHidden.length})` : '← 全部会话' }}
+        </button>
+        <button class="btn ghost" @click="sessOpen = false">关闭</button>
+      </div>
+
+      <div class="sess-list" v-if="sessView === 'all' && sessList.length">
+        <div class="sess-row" v-for="s in sessList" :key="s.id" @click="openSession(s)"
+             title="在 iTerm2 新标签打开该会话">
+          <div class="sess-main">
+            <input v-if="editingSessId === s.id" class="sess-edit-input" v-model="editingName"
+                   @click.stop
+                   @keyup.enter="saveRename(s)" @keyup.esc="cancelRename(); $event.target.blur()"
+                   @blur="saveRename(s)" placeholder="会话名称，留空恢复默认">
+            <b class="oneline" v-else :title="s.title">{{ shortTitle(s.title) || '未命名会话' }}<span v-if="s.renamed" class="renamed-mark" title="自定义名称">✏️</span></b>
+            <span class="badge sm sess-wait" v-if="s.waiting">等待审批</span>
+            <span class="badge sm sess-run" v-if="s.running">运行中</span>
+            <button class="linklike sess-act" @click.stop="startRename(s)">改名</button>
+            <button class="linklike sess-act" @click.stop="hideSession(s, true)">隐藏</button>
+          </div>
+          <div class="muted sess-meta">
+            <span class="oneline">📁 {{ s.cwd }}</span>
+            <span class="sess-time">{{ agoText(s.last_active) }}</span>
+          </div>
+        </div>
+      </div>
+      <div class="sess-list" v-else-if="sessView === 'hidden' && sessHidden.length">
+        <div class="sess-row" v-for="s in sessHidden" :key="s.id">
+          <div class="sess-main">
+            <b class="oneline" :title="s.title">{{ shortTitle(s.title) || '未命名会话' }}</b>
+            <span class="badge sm sess-wait" v-if="s.waiting">等待审批</span>
+            <button class="linklike sess-act stay" @click="hideSession(s, false)">恢复</button>
+          </div>
+          <div class="muted sess-meta">
+            <span class="oneline">📁 {{ s.cwd }}</span>
+            <span class="sess-time">{{ agoText(s.last_active) }}</span>
+          </div>
+        </div>
+      </div>
+      <p class="hint" v-else>{{ sessView === 'all' ? '没有找到会话记录' : '没有已隐藏的会话' }}</p>
+
+      <div class="modal-foot">
+<!--        <button class="btn ghost" @click="enter(sessAgent)">仅打开 iTerm2</button>-->
+<!--        <span class="muted">点击任一会话 = 新标签 cd 到项目目录并 resume</span>-->
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" v-if="toast.text" :class="toast.type">{{ toast.text }}</div>
+</div>
+
+<script src="/static/vendor/vue.global.prod.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

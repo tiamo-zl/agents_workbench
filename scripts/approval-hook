@@ -1,0 +1,26 @@
+#!/bin/sh
+# 审批标记协议 v2：
+#   approval-hook <agent_id> <session_id> request  → 会话级 touch approvals/<agent>/<sid>
+#   approval-hook <agent_id> <session_id> resolve  → 会话级 rm 同上
+#   <session_id> 传 "-" 或空 → agent 级平文件 approvals/<agent>（hook 拿不到会话 id 时）
+set -eu
+DIR="$HOME/.agent_board/approvals"
+agent="${1:?agent_id required}"
+sid="${2:--}"
+action="${3:?request|resolve required}"
+mkdir -p "$DIR"
+if [ "$sid" = "-" ] || [ -z "$sid" ]; then
+  target="$DIR/$agent"
+else
+  # v1 遗留：agent 路径上是平文件时先清掉，才能建会话目录
+  if [ -e "$DIR/$agent" ] && [ ! -d "$DIR/$agent" ]; then
+    rm -f "$DIR/$agent"
+  fi
+  mkdir -p "$DIR/$agent"
+  target="$DIR/$agent/$sid"
+fi
+case "$action" in
+  request) touch "$target" ;;
+  resolve) rm -rf "$target" ;;   # -rf：agent 级 resolve 需能清掉遗留目录
+  *) echo "usage: $0 <agent_id> <session_id|-> request|resolve" >&2; exit 1 ;;
+esac

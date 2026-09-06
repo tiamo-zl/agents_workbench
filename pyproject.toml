@@ -1,0 +1,20 @@
+[project]
+name = "agents-workbench"
+version = "0.1.0"
+description = "本机 AI Agent 集中看板 + 任务流水线（macOS）"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.141.1",
+    "psutil>=7.2.2",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[project.scripts]
+workbench = "agent_board.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_board"]

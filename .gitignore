@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# 用户本地数据（个人配置与任务输出，不入库）
+config.json
+runs/
+
+# IDE
+.idea/
+.DS_Store
+
+# Node（前端 vendor 之外的产物不存在，防御性忽略）
+node_modules/
+.zcode/
