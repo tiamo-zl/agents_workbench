@@ -6,6 +6,13 @@ macOS 本机 AI Agent 集中监控看板 + 任务流水线。一个 Chrome 应�
 
 ## 功能总览
 
+<img width="1378" height="870" alt="image" src="https://github.com/user-attachments/assets/44361d38-64db-460f-a92f-70a1b0b410fe" />
+<img width="1377" height="860" alt="image" src="https://github.com/user-attachments/assets/2938844f-e013-4912-bad9-ac3de66ab1c4" />
+
+<img width="1374" height="868" alt="image" src="https://github.com/user-attachments/assets/440f4f31-4702-403e-9b5b-16a6d13348df" />
+
+
+
 ### 1. 全家福状态监控
 - 支持：**Claude Code、Codex CLI、Mimo Code、Hermes Agent、ZCode、
   DeepSeek Harness、Gemini CLI**，以及 ChatGPT / Claude 桌面版 / Cursor /
